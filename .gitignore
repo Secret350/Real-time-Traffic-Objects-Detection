@@ -1,0 +1,16 @@
+/EasyOCR/test_easyocr.py
+/.idea
+/.venv
+/dataset
+/image_test
+/inference
+/model
+/processing
+/Real-time_sys/Testing-Video
+/src/runs
+/src/50_debug.py
+/src/draw_loss_curve.py
+/src/train_yolov11.py
+/src/yolo11s.pt
+/src/yolo11n.pt
+/src/yolo26n.pt
