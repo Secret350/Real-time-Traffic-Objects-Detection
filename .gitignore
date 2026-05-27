@@ -7,7 +7,11 @@
 /model
 /processing
 /Real-time_sys/Testing-Video
-/src/runs
+/src/runs/detect/val
+/src/runs/detect/yolo11_vntraffic_merged_32classes_dataset
+/src/runs/detect/yolo11_vntraffic_merged_32classes_dataset-2
+/src/runs/detect/yolo11_vntraffic_merged_32classes_dataset-3
+/src/runs/detect/50_debug.py
 /src/50_debug.py
 /src/draw_loss_curve.py
 /src/train_yolov11.py
