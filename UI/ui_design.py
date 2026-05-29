@@ -1,4 +1,6 @@
-import sys
+import sys, os
+import threading
+
 import cv2
 import time
 import numpy as np
@@ -13,22 +15,27 @@ import easyocr
 from PyQt5.QtWidgets import (
     QApplication,QMainWindow,QWidget,QLabel,QPushButton,
     QSlider,QVBoxLayout,QHBoxLayout,QFrame,QScrollArea,
-    QSizePolicy,QSpacerItem
+    QSizePolicy,QSpacerItem,QFileDialog
 )
 from PyQt5.QtCore import Qt, QThread,pyqtSignal,pyqtSlot,QTimer
 from PyQt5.QtGui import QImage,QPixmap,QFont,QColor
 
+#Path
+_BASE = getattr(sys,"_MEIPASS",os.path.dirname(os.path.abspath(__file__)))
+_OCR_DIR = os.path.join(_BASE,"easyocr_models")
+_CAPTURE_DIR = os.path.join(os.path.expanduser("~"),"VN_Traffic_Captures")
+os.makedirs(_CAPTURE_DIR,exist_ok=True)
 #Config
-MODEL_PATH = "../src/runs/detect/yolo11_vntraffic_merged_32classes_dataset-4/weights/best.pt"
-# VIDEO_SOURCE = 0 #0=webcam/videosource
-VIDEO_SOURCE    = "../Real-time_sys/Testing-Video/Testing-video.mp4"
+MODEL_PATH = os.path.join(_BASE,"models","best.pt")
+VIDEO_SOURCE = 0 # 0=webcam/videosource
+# VIDEO_SOURCE    = "../Real-time_sys/Testing-Video/Testing-video.mp4"
 CONF       = 0.75
 CAM_ID     = 0
 CAM_W,CAM_H= 1280, 720
 
 #OCR config
 SPEED_CLASS_ID  = 24
-VALID_SPEEDS    = {"30","40","50","60","70","80","100","120"}
+VALID_SPEEDS    = {"5","10","15","20","30","40","50","60","70","80","90","100","110","120"}
 OCR_INTERVAL    = 5 #OCR only after OCR_INTERVAL frames
 
 #Config color
@@ -44,8 +51,6 @@ C_TEXT      = "#e2e8f7" #text
 C_DIM       = "#ffffff" #small content
 C_FPS       = "#64b5f6" #FPS
 C_SPEED     = "#ff6b6b" #speed sign
-
-# TODO: Tìm hiểu ý nghĩa các biến màu
 
 CV_GREEN  = (0,212,170) #Color for normal sign, conf >= 0.65
 CV_ORANGE = (0,170,255) #Detection's conf >= 0.5
@@ -105,6 +110,35 @@ def draw_detections(frame: np.ndarray,dets:list) -> np.ndarray:
         cv2.putText(frame,label,(lx1+2,ly1+th+2),cv2.FONT_HERSHEY_SIMPLEX,scale,(10,15,25),1,cv2.LINE_AA)
     return frame
 
+#Webcam Frame Grabber
+class FrameGrabber(QThread):
+    def __init__(self,source):
+        super().__init__()
+        self.source = source
+        self._running = True
+        self._frame = None
+        self._lock = threading.Lock()
+
+    def run(self):
+        cap = cv2.VideoCapture(self.source)
+        cap.set(cv2.CAP_PROP_FRAME_WIDTH,CAM_W)
+        cap.set(cv2.CAP_PROP_FRAME_HEIGHT, CAM_H)
+        cap.set(cv2.CAP_PROP_BUFFERSIZE,1)
+        while self._running:
+            ret, frame = cap.read()
+            if ret:
+                frame = cv2.flip(frame, 1)
+                with self._lock:
+                    self._frame = frame
+        cap.release()
+
+    def get_frame(self):
+        with self._lock:
+            return self._frame.copy() if self._frame is not None else None
+
+    def stop(self):
+        self._running = False
+        self.wait()
 
 #Inference Thead
 """
@@ -141,20 +175,30 @@ class InferenceThread(QThread):
         self.status_changed.emit("Loading EasyOCR...","warn")
         try:
             gpu_ocr = (self._device==0)
-            self._ocr_reader = easyocr.Reader(["en"],gpu=gpu_ocr)
+            self._ocr_reader = easyocr.Reader(["en"],gpu=gpu_ocr,model_storage_directory=_OCR_DIR)
             self.status_changed.emit("EasyOCR Loaded","ok")
         except Exception as exc:
             self.status_changed.emit(f"Error EasyOCR: {exc}","error")
             return
 
-        cap = cv2.VideoCapture(VIDEO_SOURCE)
-        if not cap.isOpened():
-            self.status_changed.emit("Camera not found!","error")
-            return
+        grabber = None
         if isinstance(VIDEO_SOURCE,int):
-            cap.set(cv2.CAP_PROP_FRAME_WIDTH,CAM_W)
-            cap.set(cv2.CAP_PROP_FRAME_HEIGHT,CAM_H)
-            cap.set(cv2.CAP_PROP_BUFFERSIZE,1)
+            grabber = FrameGrabber(VIDEO_SOURCE)
+            grabber.start()
+            for _ in range (50):
+                if grabber.get_frame() is not None:
+                    break
+                time.sleep(0.1)
+            if grabber.get_frame() is None:
+                self.status_changed.emit("Camera not found!","error")
+                grabber.stop()
+                return
+            cap = None
+        else:
+            cap = cv2.VideoCapture(VIDEO_SOURCE)
+            if not cap.isOpened():
+                self.status_changed.emit("Video not found!","error")
+                return
 
         self._running = True
         self.status_changed.emit("Live","ok")
@@ -165,10 +209,16 @@ class InferenceThread(QThread):
                 continue
 
             t0 = time.perf_counter()
-            ret,frame= cap.read()
-            if not ret:
-                self.status_changed.emit("Video Ended","warm")
-                continue
+            if grabber:
+                frame = grabber.get_frame()
+                if frame is None:
+                    continue
+            else:
+                assert cap is not None
+                ret,frame = cap.read()
+                if not ret:
+                    self.status_changed.emit("Video Ended!","warn")
+                    continue
 
             self._frame_count += 1
             run_ocr = (self._frame_count % OCR_INTERVAL == 0)
@@ -206,8 +256,10 @@ class InferenceThread(QThread):
             avg_fps = sum(self._fps_buf) / len(self._fps_buf)
 
             self.frame_ready.emit(frame, dets,avg_fps)
-            time.sleep(0.01)
-        cap.release()
+        if grabber:
+            grabber.stop()
+        elif cap:
+            cap.release()
 
     def stop(self):
         self._running=False
@@ -556,6 +608,10 @@ class MainWindow(QMainWindow):
         btn_row.addWidget(self.btn_pause)
         btn_row.addWidget(self.btn_capture)
 
+        self.btn_open_video = QPushButton("|V| Open Video")
+        self.btn_open_video.setObjectName("BtnSecondary")
+        cv_layout.addWidget(self.btn_open_video)
+
         self.btn_clear = QPushButton("|X| CLEAR LOG")
         self.btn_clear.setObjectName("BtnGhost")
 
@@ -593,6 +649,7 @@ class MainWindow(QMainWindow):
         self.btn_pause.clicked.connect(self._on_pause)
         self.btn_capture.clicked.connect(self._on_capture)
         self.btn_clear.clicked.connect(lambda: self.det_log.clear_log())
+        self.btn_open_video.clicked.connect(self._on_open_video)
 
     #Inference
     def _start_inference(self):
@@ -663,9 +720,28 @@ class MainWindow(QMainWindow):
         if self._last_frame is None:
             return
         ts = datetime.now().strftime("%Y%m%d_%H%M%S")
-        path = f"../UI/capture/capture_{ts}.jpg"
+        path = os.path.join(_CAPTURE_DIR,f"capture_{ts}.jpg")
         cv2.imwrite(path,self._last_frame)
         self._on_status(f"Saved: {path}","ok")
+
+    def _on_open_video(self):
+        path,_ = QFileDialog.getOpenFileName(
+            self,"Choose Video",
+            os.path.expanduser("~"), "Video Files (*.mp4 *.avi *.mov *.mkv *.wmv)"
+        )
+        if not path:
+            return
+
+        if self._thread and self._thread.isRunning():
+            self._thread.frame_ready.disconnect()
+            self._thread.status_changed.disconnect()
+            self._thread.stop()
+
+        global VIDEO_SOURCE
+        VIDEO_SOURCE = path
+        self.det_log.clear_log()
+        self._on_status(f"{Path(path).name}","ok")
+        self._start_inference()
 
     #Helper
     def _show_frame(self,frame:np.ndarray):
