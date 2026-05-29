@@ -16,7 +16,7 @@ NAMES_PATH = "../inference/classes_vie.txt"
 # ─────────────────────────────────────────────
 CONF_THRESHOLD = 0.2  # Ngưỡng tin cậy (confidence)
 IOU_THRESHOLD = 0.45  # Ngưỡng IoU cho NMS
-IMG_SIZE = 640  # Kích thước input model
+IMG_SIZE = 640  # Kích thước input models
 DEVICE = "cuda" if torch.cuda.is_available() else "cpu"
 
 # Màu sắc bounding box theo từng loại biển (BGR)
@@ -99,7 +99,7 @@ def run_inference(
     print(f"  Conf    : {conf}  |  IoU : {iou}  |  Size : {imgsz}")
     print(f"{'=' * 55}\n")
 
-    # Load class names & model
+    # Load class names & models
     class_names = load_class_names(names_path)
     model = YOLO(weight_path)
     model.to(device)
